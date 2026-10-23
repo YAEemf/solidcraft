@@ -14,8 +14,6 @@ use crate::viewport::Proj;
 
 /// Most points the CPU viewport draws of all clouds together.
 const MAX_CPU_POINTS: usize = 100_000;
-/// The colour of a cloud's points when it has none of its own.
-const PLAIN: [u8; 3] = [150, 160, 175];
 
 /// What a cloud's dots are made from: they are made again only when one of these changes.
 #[derive(Clone, PartialEq)]
@@ -26,7 +24,9 @@ struct Key {
     origin: [u64; 3],
     transform: [u64; 16],
     size: u64,
+    color_by: solidcraft_engine::doc::point_cloud::ColorBy,
     color: Option<[u32; 3]>,
+    height_range: Option<[u64; 2]>,
 }
 
 impl Key {
@@ -38,7 +38,9 @@ impl Key {
             origin: [c.origin.x, c.origin.y, c.origin.z].map(f64::to_bits),
             transform: std::array::from_fn(|i| c.transform[i / 4][i % 4].to_bits()),
             size: c.point_size.to_bits(),
+            color_by: c.color_by,
             color: c.color.map(|k| k.map(f32::to_bits)),
+            height_range: c.height_range.map(|r| r.map(f64::to_bits)),
         }
     }
 }
@@ -49,21 +51,15 @@ thread_local! {
     static VERSION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-fn rgb(c: &PointCloud, i: usize) -> [u8; 3] {
-    match c.color {
-        Some(k) => k.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8),
-        None => c.colors.get(i).unwrap_or(PLAIN),
-    }
-}
-
 fn dots(c: &PointCloud) -> Vec<u8> {
     let mut out = Vec::with_capacity(c.len() * crate::gpu::CLOUD_POINT_SIZE);
     let size = c.point_size as f32;
+    let shade = c.shade();
     for (i, p) in c.points.iter().enumerate() {
         // Placed in double precision: the cloud's origin may be far from the design's.
         let local = c.origin + solidcraft_engine::geom::Vec3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]));
         let w = solidcraft_engine::doc::apply_point(&c.transform, local);
-        crate::gpu::cloud_point(&mut out, [w.x as f32, w.y as f32, w.z as f32], rgb(c, i), size);
+        crate::gpu::cloud_point(&mut out, [w.x as f32, w.y as f32, w.z as f32], shade(i), size);
     }
     out
 }
@@ -108,10 +104,11 @@ pub fn show(app: &SolveApp, painter: &Painter, proj: &Proj) {
     let mut shapes = Vec::new();
     for c in clouds {
         let r = (c.point_size as f32 / painter.ctx().pixels_per_point() * 0.5).max(0.5);
+        let shade = c.shade();
         for i in (0..c.len()).step_by(stride) {
             let Some(p) = c.world_point(i) else { continue };
             let Some(q) = proj.to_screen(p) else { continue };
-            let [cr, cg, cb] = rgb(c, i);
+            let [cr, cg, cb] = shade(i);
             shapes.push(Shape::rect_filled(egui::Rect::from_center_size(q, egui::vec2(r * 2.0, r * 2.0)), 0.0, Color32::from_rgb(cr, cg, cb)));
         }
     }
@@ -142,6 +139,12 @@ mod tests {
         let blue = gpu_points(&h.app);
         assert_ne!(blue[0].version, first[0].version);
         assert_eq!(&blue[0].bytes[12..15], &[0, 0, 255]);
+        // By height across x = 0…10 (the cloud turned so x is up): low end blue, high end red.
+        let up = serde_json::json!([0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0]);
+        h.app.run("pointcloud.edit", serde_json::json!({"cloud": id, "color_by": "height", "matrix": up})).unwrap();
+        let ramp = gpu_points(&h.app);
+        let ramp_of = solidcraft_engine::doc::point_cloud::height_ramp;
+        assert_eq!((&ramp[0].bytes[12..15], &ramp[0].bytes[28..31]), (&ramp_of(0.0)[..], &ramp_of(1.0)[..]));
         // Hidden, alone or with its folder: nothing drawn; the view frames it while shown.
         assert!(!solidcraft_engine::view::bounds(&h.app.session).is_empty());
         h.app.run("pointcloud.edit", serde_json::json!({"cloud": id, "visible": false})).unwrap();

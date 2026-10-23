@@ -3,7 +3,7 @@
 
 use serde_json::{Value, json};
 use solidcraft_doc::Mat;
-use solidcraft_doc::point_cloud::{Colors, MAX_POINTS, POINT_SIZE, PointCloud, Points, UNITS, unit_scale};
+use solidcraft_doc::point_cloud::{ColorBy, Colors, MAX_COORD, MAX_POINTS, POINT_SIZE, PointCloud, Points, UNITS, unit_scale};
 
 use super::CommandSpec;
 use crate::params::{bad, bool_, str_};
@@ -13,16 +13,16 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("pointcloud.insert", "Insert Point Cloud", insert)
         .at("SOLID", "INSERT")
         .icon("import")
-        .params("path: .ply, .xyz or .pts file (its points join the design as a point cloud: drawn as points, never a body; a PLY's red, green and blue are its colours) → cloud, name, points, source_points, bounds, warnings; name?; units?: mm|cm|m|in|ft (the file's length unit, default mm); max_points?: most points kept (default 5000000, at most 20000000; a larger file is thinned evenly); center?: bool (move the cloud so the middle of its base sits at the origin); point_size?: pixels (0.5…16, default 2); color?: [r, g, b] 0…1 (one colour for every point)"),
+        .params("path: .ply, .xyz or .pts file (its points join the design as a point cloud: drawn as points, never a body; a PLY's red, green and blue are its colours) → cloud, name, points, source_points, bounds, warnings; name?; units?: mm|cm|m|in|ft (the file's length unit, default mm); max_points?: most points kept (default 5000000, at most 20000000; a larger file is thinned evenly); center?: bool (move the cloud so the middle of its base sits at the origin); point_size?: pixels (0.5…16, default 2); color_by?: file|single|height (the file's colours, the default; one colour; or a ramp by height, blue low to red high); color?: [r, g, b] 0…1 (the single colour; given alone it sets color_by single, null sets color_by file); height_range?: [low, high] design Z in mm for the height ramp, or null to work it out from the points (all but the lowest and highest 2 %)"),
     CommandSpec::new("pointcloud.edit", "Edit Point Cloud", edit)
         .icon("edit")
-        .params("cloud: id or name; name?; visible?; point_size?: pixels (0.5…16); color?: [r, g, b] 0…1, or null for the file's colours; units?: mm|cm|m|in|ft (the file's length unit: the points are scaled from the unit they came in as); matrix?: [12 or 16 numbers] (where the cloud sits: a rigid row-major 3x4 or 4x4 matrix, as occurrence.move takes it); tolerance? → cloud"),
+        .params("cloud: id or name; name?; visible?; point_size?: pixels (0.5…16); color_by?: file|single|height (the file's colours, the default; one colour; or a ramp by height, blue low to red high); color?: [r, g, b] 0…1 (the single colour; given alone it sets color_by single, null sets color_by file); height_range?: [low, high] design Z in mm for the height ramp, or null to work it out from the points (all but the lowest and highest 2 %); units?: mm|cm|m|in|ft (the file's length unit: the points are scaled from the unit they came in as); matrix?: [12 or 16 numbers] (where the cloud sits: a rigid row-major 3x4 or 4x4 matrix, as occurrence.move takes it); tolerance? → cloud"),
     CommandSpec::new("pointcloud.delete", "Delete Point Cloud", delete).icon("delete").params("cloud: id or name → deleted"),
     CommandSpec::new("pointcloud.list", "Point Clouds", list)
         .icon("list")
         .noundo()
         .doc_only()
-        .params("→ clouds: [{cloud, name, file, points, source_points, units, visible, point_size, color, colored, bounds: [[x,y,z], [x,y,z]] in the design, matrix}]"),
+        .params("→ clouds: [{cloud, name, file, points, source_points, units, visible, point_size, color_by, color, colored, height_range (the ramp's now, its own or worked out), height_auto, bounds: [[x,y,z], [x,y,z]] in the design, matrix}]"),
 ];
 
 fn units_of(p: &Value, cmd: &str) -> Result<Option<(&'static str, f64)>> {
@@ -64,6 +64,45 @@ fn color(p: &Value, cmd: &str) -> Result<Option<Option<[f32; 3]>>> {
     }
 }
 
+/// `color_by`: absent (`None`), or file, single or height.
+fn color_by(p: &Value, cmd: &str) -> Result<Option<ColorBy>> {
+    match p.get("color_by") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_str().and_then(ColorBy::parse).map(Some).ok_or_else(|| bad(cmd, "`color_by` must be file, single or height")),
+    }
+}
+
+/// `height_range`: absent (`None`), null for the automatic one (`Some(None)`), or [low, high].
+fn height_range(p: &Value, cmd: &str) -> Result<Option<Option<[f64; 2]>>> {
+    let refuse = || bad(cmd, "`height_range` must be [low, high] heights in mm, lowest first, or null");
+    match p.get("height_range") {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(Value::Array(a)) => match a.iter().map(Value::as_f64).collect::<Option<Vec<f64>>>().as_deref() {
+            Some(&[lo, hi]) if lo.is_finite() && hi.is_finite() && lo < hi && lo.abs() <= MAX_COORD && hi.abs() <= MAX_COORD => {
+                Ok(Some(Some([lo, hi])))
+            }
+            _ => Err(refuse()),
+        },
+        Some(_) => Err(refuse()),
+    }
+}
+
+/// Apply `color_by`, `color` and `height_range`: a colour given alone means one colour, and
+/// `color: null` the file's.
+fn set_colors(c: &mut PointCloud, by: Option<ColorBy>, color: Option<Option<[f32; 3]>>, range: Option<Option<[f64; 2]>>) {
+    if let Some(k) = color {
+        c.color = k.or(c.color);
+        c.color_by = if k.is_some() { ColorBy::Single } else { ColorBy::File };
+    }
+    if let Some(b) = by {
+        c.color_by = b;
+    }
+    if let Some(r) = range {
+        c.height_range = r;
+    }
+}
+
 /// The cloud's placement as `matrix` takes it: 12 numbers, row by row.
 fn matrix_rows(m: &Mat) -> Vec<f64> {
     (0..3).flat_map(|row| (0..4).map(move |col| m[col][row])).collect()
@@ -99,7 +138,7 @@ fn insert(s: &mut Session, p: &Value) -> Result<Value> {
             .ok_or_else(|| bad(cmd, format!("`max_points` must be a whole number from 1 to {MAX_POINTS}")))?,
     };
     let size = point_size(p, cmd)?.unwrap_or(2.0);
-    let one_color = color(p, cmd)?.flatten();
+    let colors = (color_by(p, cmd)?, color(p, cmd)?, height_range(p, cmd)?);
     let center = bool_(p, "center").unwrap_or(false);
     let bytes = solidcraft_io::vfs::read(path, solidcraft_io::MAX_POINT_CLOUD_BYTES).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     let read = solidcraft_io::read_point_cloud(&bytes, path, scale, max_points).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
@@ -129,9 +168,12 @@ fn insert(s: &mut Session, p: &Value) -> Result<Value> {
         units: units.into(),
         transform: solidcraft_doc::IDENTITY,
         point_size: size,
-        color: one_color,
+        color_by: ColorBy::File,
+        color: None,
+        height_range: None,
         visible: true,
     };
+    set_colors(&mut cloud, colors.0, colors.1, colors.2);
     if center && let Some((lo, hi)) = cloud.local_bounds() {
         cloud.transform[3] = [-(lo.x + hi.x) / 2.0, -(lo.y + hi.y) / 2.0, -lo.z, 1.0];
     }
@@ -164,7 +206,7 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "pointcloud.edit";
     let i = find(s, p, cmd)?;
     let size = point_size(p, cmd)?;
-    let one_color = color(p, cmd)?;
+    let colors = (color_by(p, cmd)?, color(p, cmd)?, height_range(p, cmd)?);
     let units = units_of(p, cmd)?;
     let placement = match p.get("matrix") {
         None | Some(Value::Null) => None,
@@ -193,9 +235,7 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(v) = size {
         c.point_size = v;
     }
-    if let Some(v) = one_color {
-        c.color = v;
-    }
+    set_colors(&mut c, colors.0, colors.1, colors.2);
     if let Some(v) = bool_(p, "visible") {
         c.visible = v;
     }
@@ -231,8 +271,11 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
                 "units": c.units,
                 "visible": c.visible,
                 "point_size": c.point_size,
+                "color_by": c.color_by.name(),
                 "color": c.color,
                 "colored": !c.colors.is_empty(),
+                "height_range": c.height_range_now(),
+                "height_auto": c.height_range.is_none(),
                 "bounds": bounds(c),
                 "matrix": matrix_rows(&c.transform),
             })
@@ -244,6 +287,7 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use solidcraft_doc::point_cloud::ColorBy;
 
     use crate::Session;
 
@@ -293,7 +337,20 @@ mod tests {
         s.execute("pointcloud.edit", &json!({"cloud": id, "matrix": [1, 0, 0, 100, 0, 1, 0, 0, 0, 0, 1, 0]})).unwrap();
         let c = &s.doc.point_clouds[0];
         assert_eq!(c.world_point(3).map(|p| [p.x, p.y, p.z]), Some([110.0, 20.0, 2.5]));
-        assert_eq!((c.point_size, c.color), (4.0, Some([1.0, 0.5, 0.0])));
+        assert_eq!((c.point_size, c.color, c.color_by), (4.0, Some([1.0, 0.5, 0.0]), ColorBy::Single));
+        // By height, its own range, then the automatic one again; back to the file's colours.
+        s.execute("pointcloud.edit", &json!({"cloud": id, "color_by": "height", "height_range": [0, 10]})).unwrap();
+        let listed = s.execute("pointcloud.list", &json!({})).unwrap();
+        assert_eq!((listed["clouds"][0]["color_by"].as_str(), listed["clouds"][0]["height_range"].clone()), (Some("height"), json!([0.0, 10.0])));
+        s.execute("pointcloud.edit", &json!({"cloud": id, "height_range": null})).unwrap();
+        let listed = s.execute("pointcloud.list", &json!({})).unwrap();
+        assert_eq!(listed["clouds"][0]["height_auto"], true);
+        assert_eq!(s.doc.point_clouds[0].color_by, ColorBy::Height);
+        s.execute("pointcloud.edit", &json!({"cloud": id, "color": null})).unwrap();
+        assert_eq!(s.doc.point_clouds[0].color_by, ColorBy::File);
+        // The single colour was kept meanwhile.
+        s.execute("pointcloud.edit", &json!({"cloud": id, "color_by": "single"})).unwrap();
+        assert_eq!(s.doc.point_clouds[0].color, Some([1.0, 0.5, 0.0]));
         let listed = s.execute("pointcloud.list", &json!({})).unwrap();
         assert_eq!(listed["clouds"][0]["units"], "mm");
         assert_eq!(listed["clouds"][0]["matrix"][3], 100.0);
@@ -357,6 +414,10 @@ mod tests {
             json!({"path": path, "point_size": "big"}),
             json!({"path": path, "color": [2, 0, 0]}),
             json!({"path": path, "color": "red"}),
+            json!({"path": path, "color_by": "rainbow"}),
+            json!({"path": path, "height_range": [5, 1]}),
+            json!({"path": path, "height_range": [0, "x"]}),
+            json!({"path": path, "height_range": [0, 1e12]}),
         ] {
             assert!(s.execute("pointcloud.insert", &p).is_err(), "{p}");
         }

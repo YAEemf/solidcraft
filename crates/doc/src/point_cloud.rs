@@ -53,11 +53,76 @@ pub struct PointCloud {
     /// Size of a point on screen (pixels).
     #[serde(default = "two")]
     pub point_size: f64,
-    /// One colour for every point (straight sRGB, 0..1) instead of the file's.
+    /// How the points are coloured.
+    #[serde(default, skip_serializing_if = "ColorBy::is_file")]
+    pub color_by: ColorBy,
+    /// The colour of every point with [`ColorBy::Single`] (straight sRGB, 0..1; `None`: [`PLAIN`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<[f32; 3]>,
+    /// The heights (design Z, mm) the [`ColorBy::Height`] ramp runs between, lowest first;
+    /// `None`: worked out from the points ([`PointCloud::auto_height_range`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height_range: Option<[f64; 2]>,
     #[serde(default = "yes")]
     pub visible: bool,
+}
+
+/// How a cloud's points are coloured.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ColorBy {
+    /// The file's colour of each point ([`PLAIN`] when it has none).
+    #[default]
+    File,
+    /// One colour for every point ([`PointCloud::color`]).
+    Single,
+    /// By height in the design: blue low, through cyan, green and yellow, to red high.
+    Height,
+}
+
+impl ColorBy {
+    fn is_file(&self) -> bool {
+        *self == ColorBy::File
+    }
+    /// From its name (`file`, `single`, `height`).
+    pub fn parse(s: &str) -> Option<ColorBy> {
+        match s {
+            "file" => Some(ColorBy::File),
+            "single" => Some(ColorBy::Single),
+            "height" => Some(ColorBy::Height),
+            _ => None,
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            ColorBy::File => "file",
+            ColorBy::Single => "single",
+            ColorBy::Height => "height",
+        }
+    }
+}
+
+/// The colour of points that have no other (straight sRGB, 0..1).
+pub const PLAIN: [f32; 3] = [0.59, 0.63, 0.69];
+/// Points sampled for the automatic height range.
+const HEIGHT_SAMPLES: usize = 200_000;
+/// The share of points left below and above the automatic height range, so a few stray points
+/// don't flatten the ramp.
+const HEIGHT_TAIL: f64 = 0.02;
+
+/// A colour of the height ramp at `t` (0: low, 1: high): blue, cyan, green, yellow, red.
+pub fn height_ramp(t: f64) -> [u8; 3] {
+    const STOPS: [[f64; 3]; 5] = [[40.0, 70.0, 200.0], [30.0, 170.0, 230.0], [60.0, 200.0, 90.0], [240.0, 220.0, 60.0], [230.0, 70.0, 50.0]];
+    let k = if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 } * (STOPS.len() - 1) as f64;
+    let i = (k as usize).min(STOPS.len() - 2);
+    let f = k - i as f64;
+    let (a, b) = (STOPS[i], STOPS[i + 1]);
+    std::array::from_fn(|c| (a[c] * (1.0 - f) + b[c] * f).round().clamp(0.0, 255.0) as u8)
+}
+
+/// A colour channel (0..1) as a byte.
+pub fn byte(v: f32) -> u8 {
+    (v.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 fn identity() -> Mat {
@@ -96,6 +161,45 @@ impl PointCloud {
         let v = |p: [f32; 3]| self.origin + Vec3::new(f64::from(p[0]), f64::from(p[1]), f64::from(p[2]));
         Some((v(lo), v(hi)))
     }
+    /// The design Z (mm) of a point from the cloud's origin.
+    fn world_z(&self, p: [f32; 3]) -> f64 {
+        let m = &self.transform;
+        let l = [self.origin.x + f64::from(p[0]), self.origin.y + f64::from(p[1]), self.origin.z + f64::from(p[2])];
+        m[0][2] * l[0] + m[1][2] * l[1] + m[2][2] * l[2] + m[3][2]
+    }
+    /// The heights (design Z, mm) holding all but the lowest and highest 2 % of the points (an
+    /// even sample of them), or `None` for an empty cloud. A flat cloud gets a range 1 mm high.
+    pub fn auto_height_range(&self) -> Option<[f64; 2]> {
+        let n = self.points.len();
+        if n == 0 {
+            return None;
+        }
+        let step = n.div_ceil(HEIGHT_SAMPLES).max(1);
+        let mut z: Vec<f64> = (0..n).step_by(step).filter_map(|i| self.points.get(i)).map(|p| self.world_z(p)).collect();
+        z.sort_by(f64::total_cmp);
+        let last = z.len().checked_sub(1)?;
+        let at = |q: f64| z.get((last as f64 * q).round() as usize).copied();
+        let (lo, hi) = (at(HEIGHT_TAIL)?, at(1.0 - HEIGHT_TAIL)?);
+        Some(if hi - lo > 1e-9 { [lo, hi] } else { [lo - 0.5, lo + 0.5] })
+    }
+    /// The heights the height ramp runs between now: the cloud's own, else the automatic ones.
+    pub fn height_range_now(&self) -> Option<[f64; 2]> {
+        self.height_range.or_else(|| self.auto_height_range())
+    }
+    /// The colour of each point (by index) as the cloud is shown.
+    pub fn shade(&self) -> impl Fn(usize) -> [u8; 3] + '_ {
+        let single = self.color.unwrap_or(PLAIN).map(byte);
+        let plain = PLAIN.map(byte);
+        let range = if self.color_by == ColorBy::Height { self.height_range_now() } else { None };
+        move |i| match self.color_by {
+            ColorBy::File => self.colors.get(i).unwrap_or(plain),
+            ColorBy::Single => single,
+            ColorBy::Height => match (range, self.points.get(i)) {
+                (Some([lo, hi]), Some(p)) => height_ramp((self.world_z(p) - lo) / (hi - lo)),
+                _ => plain,
+            },
+        }
+    }
     /// The corners of the box around the points, placed in the design (mm).
     pub fn world_corners(&self) -> Option<[Vec3; 8]> {
         let (lo, hi) = self.local_bounds()?;
@@ -128,6 +232,10 @@ impl PointCloud {
         }
         if self.color.is_some_and(|c| c.iter().any(|v| !(0.0..=1.0).contains(v))) {
             return bad("its colour is out of range");
+        }
+        if self.height_range.is_some_and(|[lo, hi]| !(lo.is_finite() && hi.is_finite() && lo < hi && lo.abs() <= MAX_COORD && hi.abs() <= MAX_COORD))
+        {
+            return bad("its height range is not two heights, lowest first");
         }
         if !rigid(&self.transform) {
             return bad("its placement is not a rigid move");
@@ -310,7 +418,9 @@ mod tests {
             units: "m".into(),
             transform: IDENTITY,
             point_size: 2.0,
+            color_by: ColorBy::File,
             color: None,
+            height_range: None,
             visible: true,
         }
     }
@@ -349,5 +459,43 @@ mod tests {
         assert!(c.check().is_err(), "a scale is not a placement");
         let c = cloud(vec![0.0; 3], Vec::new());
         assert!(check_all(&[c.clone(), c]).is_err(), "two clouds with one id");
+        for range in [[5.0, 5.0], [9.0, 1.0], [f64::NAN, 1.0], [0.0, 1e12]] {
+            let mut c = cloud(vec![0.0; 3], Vec::new());
+            c.height_range = Some(range);
+            assert!(c.check().is_err(), "{range:?}");
+        }
+    }
+
+    #[test]
+    fn points_are_coloured_by_the_file_one_colour_or_their_height() {
+        // Heights 0..=100 mm, and a stray point far above the rest.
+        let mut values: Vec<f32> = (0..=100).flat_map(|z| [0.0, 0.0, z as f32]).collect();
+        values.extend([0.0, 0.0, 1000.0]);
+        let colors: Vec<u8> = (0..102).flat_map(|i| [i as u8, 7, 9]).collect();
+        let mut c = cloud(values, colors);
+        c.origin = Vec3::ZERO;
+        assert_eq!(c.shade()(3), [3, 7, 9], "the file's colours");
+        c.colors = Colors::default();
+        assert_eq!(c.shade()(3), PLAIN.map(byte), "none: plain");
+        c.color_by = ColorBy::Single;
+        c.color = Some([1.0, 0.5, 0.0]);
+        assert_eq!(c.shade()(50), [255, 128, 0]);
+        // The stray point doesn't stretch the automatic range.
+        c.color_by = ColorBy::Height;
+        // 102 points: the 2nd and the 99th (of 0…101) once sorted.
+        assert_eq!(c.auto_height_range(), Some([2.0, 99.0]));
+        {
+            let shade = c.shade();
+            assert_eq!((shade(0), shade(100), shade(101)), (height_ramp(0.0), height_ramp(1.0), height_ramp(1.0)));
+            assert_eq!(shade(50), height_ramp(48.0 / 97.0));
+        }
+        // A range of its own; moved up 100 mm, everything is above it.
+        c.height_range = Some([0.0, 50.0]);
+        assert_eq!(c.shade()(25), height_ramp(0.5));
+        c.transform[3][2] = 100.0;
+        assert_eq!(c.shade()(0), height_ramp(1.0));
+        assert_eq!((height_ramp(0.0), height_ramp(1.0), height_ramp(f64::NAN)), ([40, 70, 200], [230, 70, 50], [40, 70, 200]));
+        let back: PointCloud = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert_eq!(back, c);
     }
 }
