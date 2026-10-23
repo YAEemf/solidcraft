@@ -117,6 +117,7 @@
   "ui.design_properties.organization": "Organisation",
   "ui.layout_compact": "Compact",
   "ui.layout_floating": "Floating",
+  "ui.point_cloud_file_colors": "File Colours",
   "ui.ribbon_labels": "Show text under ribbon icons",
   "ui.workspace_layout": "Workspace layout",
   "ui.zoom_to_cursor_tip": "The wheel zooms towards the point under the cursor (off: towards the view's centre)",

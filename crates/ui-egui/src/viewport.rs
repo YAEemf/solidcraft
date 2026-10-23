@@ -1949,6 +1949,11 @@ fn sketch_bounds(app: &SolveApp, st: &std::sync::Arc<solidcraft_engine::doc::Mod
     if let Ok(mut g) = app.viewport.sketch_bounds.lock() {
         *g = Some((std::sync::Arc::clone(st), b));
     }
+    for c in solidcraft_engine::view::shown_point_clouds(&app.session) {
+        for p in c.world_corners().into_iter().flatten() {
+            b.add(p);
+        }
+    }
     b
 }
 
@@ -4013,6 +4018,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             back: proj.cam.back().to_f32(),
             size_px,
             images: crate::ref_images::gpu_images(app),
+            points: crate::point_clouds::gpu_points(app),
             analysis: analysis_uniform(app),
             analysis_colors: crate::gpu::analysis_colors(&t.analysis),
             access: crate::access::map(app),
@@ -4521,6 +4527,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     }
     crate::preview::paint_sketches(app, &painter, &proj);
     crate::ref_images::show(app, ui, &painter, &proj);
+    crate::point_clouds::show(app, &painter, &proj);
     crate::dialogs_assembly::origins(app, &painter, &proj);
     crate::dialogs_assembly::joint_glyphs(app, &painter, &proj);
     overlays(app, &painter, &proj);
@@ -7114,6 +7121,7 @@ mod tests {
                     clip: [0.0; 4],
                     cap: [0.0; 4],
                     images: Vec::new(),
+                    points: Vec::new(),
                     analysis: [0.0; 8],
                     analysis_colors: crate::gpu::analysis_colors(&Tokens::get().analysis),
                     access: None,
