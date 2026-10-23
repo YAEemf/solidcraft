@@ -20,6 +20,17 @@ says what it is; the default is millimetres, as for every other import. Lidar an
 usually in metres. The unit can be changed afterwards (Browser › Point Clouds › Edit Point Cloud,
 or `pointcloud.edit` with `units`): the points are scaled from the unit they came in as.
 
+## Colours
+
+**Color By** in the Edit Point Cloud card (or `color_by`) says how the points are coloured:
+
+- `file` (the default): the file's colour of each point, grey when it has none.
+- `single`: one colour (`color`) for every point.
+- `height`: a ramp by design Z, blue low through cyan, green and yellow to red high. It runs
+  between two heights (`height_range`, mm). By default they are worked out from the points: all
+  but the lowest and highest 2 %, so a few stray points don't flatten the ramp. Turn
+  **Automatic Range** off in the card to set them.
+
 ## Size
 
 A cloud keeps at most `max_points` points (5,000,000 unless asked, at most 20,000,000); a larger
@@ -31,9 +42,11 @@ file as a binary part (12 bytes a point, 3 more with colours).
 ## Commands
 
 - `pointcloud.insert` — `path`; `name?`, `units?`, `max_points?`, `center?` (move the middle of
-  its base to the origin), `point_size?` (pixels), `color?` (`[r, g, b]` 0…1 for every point).
-- `pointcloud.edit` — `cloud` (id or name); `name?`, `visible?`, `point_size?`, `color?` (`null`
-  for the file's colours), `units?`, `matrix?` (a rigid placement, as `occurrence.move` takes it).
+  its base to the origin), `point_size?` (pixels), `color_by?` (`file`, `single`, `height`),
+  `color?` (`[r, g, b]` 0…1; alone it means `single`, `null` means `file`), `height_range?`
+  (`[low, high]` mm, or `null` for the automatic range).
+- `pointcloud.edit` — `cloud` (id or name); `name?`, `visible?`, `point_size?`, `color_by?`,
+  `color?`, `height_range?`, `units?`, `matrix?` (a rigid placement, as `occurrence.move` takes it).
 - `pointcloud.delete`, `pointcloud.list`.
 - `doc.open` opens a point cloud file as a new design holding it; dropping one on the window
   adds it to the open design.
@@ -41,5 +54,5 @@ file as a binary part (12 bytes a point, 3 more with colours).
 ## Example
 
 ```json
-{"command": "pointcloud.insert", "params": {"path": "glim-points.ply", "units": "m"}}
+{"command": "pointcloud.insert", "params": {"path": "glim-points.ply", "units": "m", "color_by": "height"}}
 ```
