@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use egui::{Color32, Painter, Shape};
+use egui::{Painter, Shape};
 use solidcraft_engine::doc::point_cloud::PointCloud;
 
 use crate::SolveApp;
@@ -108,8 +108,7 @@ pub fn show(app: &SolveApp, painter: &Painter, proj: &Proj) {
         for i in (0..c.len()).step_by(stride) {
             let Some(p) = c.world_point(i) else { continue };
             let Some(q) = proj.to_screen(p) else { continue };
-            let [cr, cg, cb] = shade(i);
-            shapes.push(Shape::rect_filled(egui::Rect::from_center_size(q, egui::vec2(r * 2.0, r * 2.0)), 0.0, Color32::from_rgb(cr, cg, cb)));
+            shapes.push(Shape::rect_filled(egui::Rect::from_center_size(q, egui::vec2(r * 2.0, r * 2.0)), 0.0, crate::theme::model_color(shade(i))));
         }
     }
     painter.extend(shapes);

@@ -1825,6 +1825,7 @@ fn same_but_features(a: &Document, b: &Document) -> bool {
         configs,
         favorites,
         canvases,
+        point_clouds,
         param_comments,
         materials,
         user_materials,
@@ -1859,6 +1860,7 @@ fn same_but_features(a: &Document, b: &Document) -> bool {
         && *configs == b.configs
         && *favorites == b.favorites
         && *canvases == b.canvases
+        && *point_clouds == b.point_clouds
         && *param_comments == b.param_comments
         && *materials == b.materials
         && *user_materials == b.user_materials

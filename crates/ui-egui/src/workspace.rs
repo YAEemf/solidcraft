@@ -424,6 +424,7 @@ pub const RIBBON_LABELS: &[(&str, &str)] = &[
     ("parts.resize", "Resize Part"),
     ("plastic.assign_rule", "Assign Rule"),
     ("plastic.manage_rules", "Plastic Rules"),
+    ("pointcloud.insert", "Point Clouds"),
     ("render.scene", "Scene"),
     ("sheet.export_bend_table", "Bend Table"),
     ("sheet.export_dxf", "Export DXF"),
