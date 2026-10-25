@@ -3248,6 +3248,10 @@ fn frame_key(cb: &Frame) -> u64 {
         img.corners.iter().flatten().for_each(|v| v.to_bits().hash(&mut h));
         img.opacity.to_bits().hash(&mut h);
     }
+    for cloud in &cb.points {
+        cloud.id.hash(&mut h);
+        cloud.version.hash(&mut h);
+    }
     match &cb.access {
         Some(a) => {
             true.hash(&mut h);
@@ -3627,6 +3631,7 @@ impl Renderer {
                 for (buffer, count) in &b.parts {
                     pass.set_vertex_buffer(0, buffer.slice(..));
                     pass.draw(0..6, 0..*count);
+                    tally.triangles(6, *count);
                 }
             }
         }
@@ -4280,6 +4285,7 @@ mod tests {
             clip: [0.0; 4],
             cap: [0.0; 4],
             images: Vec::new(),
+            points: Vec::new(),
             analysis: [0.0; 8],
             analysis_colors: [0.0; 36],
             access: None,
@@ -4780,6 +4786,7 @@ mod glass_tests {
             clip: [0.0; 4],
             cap: [0.0; 4],
             images: Vec::new(),
+            points: Vec::new(),
             analysis: [0.0; 8],
             analysis_colors: [0.0; 36],
             access: None,
@@ -4801,6 +4808,31 @@ mod glass_tests {
         scene.tri([5.0, -5.0, 0.0], [0.0, 0.0, 1.0], red);
         scene.tri([0.0, 5.0, 0.0], [0.0, 0.0, 1.0], red);
         scene
+    }
+
+    #[test]
+    fn a_cached_point_cloud_picture_updates_after_recoloring_and_hiding() {
+        let Some((_, device, queue)) = crate::open_headless().ok() else { return };
+        let depth = crate::depth_format(&device, true);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut renderer = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false }, None);
+        let mut frame = test_frame(GpuScene::default(), 2.0);
+        let mut bytes = Vec::new();
+        cloud_point(&mut bytes, [0.0; 3], [255, 0, 0], 20.0);
+        frame.points.push(GpuPoints { id: 1, version: 1, bytes: Arc::new(bytes) });
+        let red = render_frame(&mut renderer, &device, &queue, &frame, true);
+        assert!(red.as_chunks::<4>().0.iter().any(|p| p[0] > 200 && p[1] < 30 && p[2] < 30), "the cloud is drawn");
+        render_frame(&mut renderer, &device, &queue, &frame, true);
+        assert!(renderer.cached.is_some());
+        let mut bytes = Vec::new();
+        cloud_point(&mut bytes, [0.0; 3], [0, 0, 255], 20.0);
+        frame.points = vec![GpuPoints { id: 1, version: 2, bytes: Arc::new(bytes) }];
+        let blue = render_frame(&mut renderer, &device, &queue, &frame, true);
+        assert!(blue.as_chunks::<4>().0.iter().any(|p| p[0] < 30 && p[1] < 30 && p[2] > 200), "the edited cloud replaces the cached picture");
+        assert_ne!(red, blue);
+        frame.points.clear();
+        let hidden = render_frame(&mut renderer, &device, &queue, &frame, true);
+        assert!(!hidden.as_chunks::<4>().0.iter().any(|p| p[0] < 30 && p[1] < 30 && p[2] > 200), "hiding the cloud removes its dots");
     }
 
     /// A still view shows the picture it drew last: a reused frame (whose filtered picture is

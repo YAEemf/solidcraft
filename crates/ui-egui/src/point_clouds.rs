@@ -128,6 +128,10 @@ mod tests {
         std::fs::write(&path, "0 0 0 255 0 0\n10 0 0 0 255 0\n").unwrap();
         let r = h.app.run("pointcloud.insert", serde_json::json!({"path": path.to_string_lossy(), "point_size": 3})).unwrap();
         let id = r["cloud"].as_u64().unwrap();
+        h.app.run("browser.collapse_all", serde_json::json!({})).unwrap();
+        assert!(!crate::browser::is_open(&h.app, "point_clouds", true));
+        h.app.run("browser.expand_all", serde_json::json!({})).unwrap();
+        assert!(crate::browser::is_open(&h.app, "point_clouds", true));
         let first = gpu_points(&h.app);
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].bytes.len(), 2 * crate::gpu::CLOUD_POINT_SIZE);
@@ -147,9 +151,13 @@ mod tests {
         assert_eq!((&ramp[0].bytes[12..15], &ramp[0].bytes[28..31]), (&ramp_of(0.0)[..], &ramp_of(1.0)[..]));
         // Hidden, alone or with its folder: nothing drawn; the view frames it while shown.
         assert!(!solidcraft_engine::view::bounds(&h.app.session).is_empty());
+        let first_bounds = crate::viewport::model_bounds(&h.app);
+        assert!(!first_bounds.is_empty());
+        assert_eq!(crate::viewport::model_bounds(&h.app), first_bounds, "cached sketch bounds keep the point cloud extent");
         h.app.run("pointcloud.edit", serde_json::json!({"cloud": id, "visible": false})).unwrap();
         assert!(gpu_points(&h.app).is_empty());
         assert!(solidcraft_engine::view::bounds(&h.app.session).is_empty());
+        assert!(crate::viewport::model_bounds(&h.app).is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

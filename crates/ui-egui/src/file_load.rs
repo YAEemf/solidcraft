@@ -1288,6 +1288,19 @@ mod tests {
     }
 
     #[test]
+    fn point_cloud_insert_keeps_all_options_on_the_worker_request() {
+        let mut request = Request::new("scan.PLY", Kind::Insert);
+        request.options =
+            json!({"units": "m", "max_points": 1000, "color_by": "height", "height_range": [1, 20], "name": "Scan"}).as_object().unwrap().clone();
+        let (command, params) = request.command();
+        assert_eq!(command, "pointcloud.insert");
+        assert_eq!(
+            params,
+            json!({"path": "scan.PLY", "units": "m", "max_points": 1000, "color_by": "height", "height_range": [1, 20], "name": "Scan"})
+        );
+    }
+
+    #[test]
     fn dxf_export_progress_keeps_frames_alive_and_never_adopts_a_worker_document() {
         let mut h = crate::scenario::Harness::new();
         h.app.run("solid.box", json!({"length":10,"width":10,"height":10})).unwrap();

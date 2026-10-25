@@ -1923,6 +1923,11 @@ pub fn model_bounds(app: &SolveApp) -> solidcraft_engine::geom::Aabb3 {
     let st = crate::open_meshing::shown_world(app);
     let bodies = body_bounds(app, &st).iter().fold(solidcraft_engine::geom::Aabb3::EMPTY, |a, (_, x)| a.union(x));
     let mut b = bodies.union(&sketch_bounds(app, &st));
+    for c in solidcraft_engine::view::shown_point_clouds(&app.session) {
+        for p in c.world_corners().into_iter().flatten() {
+            b.add(p);
+        }
+    }
     for point in crate::sketch_attachment_ui::guide_lines(app).into_iter().flatten() {
         b.add(point);
     }
@@ -1948,11 +1953,6 @@ fn sketch_bounds(app: &SolveApp, st: &std::sync::Arc<solidcraft_engine::doc::Mod
     }
     if let Ok(mut g) = app.viewport.sketch_bounds.lock() {
         *g = Some((std::sync::Arc::clone(st), b));
-    }
-    for c in solidcraft_engine::view::shown_point_clouds(&app.session) {
-        for p in c.world_corners().into_iter().flatten() {
-            b.add(p);
-        }
     }
     b
 }
