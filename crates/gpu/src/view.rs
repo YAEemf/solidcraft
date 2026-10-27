@@ -4815,7 +4815,7 @@ mod glass_tests {
         let Some((_, device, queue)) = crate::open_headless().ok() else { return };
         let depth = crate::depth_format(&device, true);
         let format = wgpu::TextureFormat::Rgba8Unorm;
-        let mut renderer = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false }, None);
+        let mut renderer = Renderer::new(&device, GpuTarget { format, depth: Some(depth), samples: 1, tess: false, oit: false }, None);
         let mut frame = test_frame(GpuScene::default(), 2.0);
         let mut bytes = Vec::new();
         cloud_point(&mut bytes, [0.0; 3], [255, 0, 0], 20.0);
