@@ -444,7 +444,7 @@ fn encode_cloud(cloud: &solidcraft_doc::point_cloud::PointCloud) -> Result<Vec<u
     let size = n
         .checked_mul(if colored { 15 } else { 12 })
         .and_then(|b| b.checked_add(24))
-        .filter(|&b| b <= MAX_DESIGN_BYTES)
+        .filter(|&b| b <= crate::limits::max_design_bytes())
         .ok_or_else(|| invalid("point cloud too large"))?;
     let mut bytes = Vec::with_capacity(size);
     bytes.extend_from_slice(POINTS_MAGIC);
